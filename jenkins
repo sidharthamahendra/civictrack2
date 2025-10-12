@@ -1,0 +1,59 @@
+pipeline {
+    agent any
+
+    environment {
+        // GitHub repository URL
+        REPO_URL = 'https://github.com/Komakulakavya/civictrack.git'
+    }
+
+    stages {
+        stage('Checkout') {
+            steps {
+                echo 'Cloning repository...'
+                git url: "${REPO_URL}", branch: 'main'
+            }
+        }
+
+        stage('Install Dependencies') {
+            steps {
+                echo 'Installing dependencies...'
+                // If using npm (for future JS frameworks)
+                // sh 'npm install'
+            }
+        }
+
+        stage('Lint / Test') {
+            steps {
+                echo 'Linting or running tests...'
+                // Example: run eslint if using JS framework
+                // sh 'npx eslint .'
+            }
+        }
+
+        stage('Build') {
+            steps {
+                echo 'Building project...'
+                // For static frontend, you may just copy files
+                sh 'mkdir -p dist'
+                sh 'cp -r *.html *.css *.js dist/'
+            }
+        }
+
+        stage('Deploy') {
+            steps {
+                echo 'Deploying project...'
+                // Example: copy to a server (requires credentials configured in Jenkins)
+                // sh 'scp -r dist/* user@server:/var/www/html/civictrack'
+            }
+        }
+    }
+
+    post {
+        success {
+            echo 'Build and deploy completed successfully!'
+        }
+        failure {
+            echo 'Build failed!'
+        }
+    }
+}
