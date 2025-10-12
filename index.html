@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CivicTrack</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>CivicTrack</h1>
+      <button id="clearBtn" class="ghost small">Clear All</button>
+    </header>
+
+    <section class="card">
+      <h2>Report an Issue</h2>
+      <form id="issueForm">
+        <div class="row">
+          <input type="text" id="title" placeholder="Issue Title" required>
+          <select id="category">
+            <option>Road</option>
+            <option>Garbage</option>
+            <option>Water</option>
+            <option>Electricity</option>
+          </select>
+        </div>
+        <textarea id="description" placeholder="Describe the issue..."></textarea>
+        <input type="text" id="location" placeholder="Enter location">
+        <button type="submit">Submit</button>
+      </form>
+    </section>
+
+    <section class="card">
+      <h2>Filters</h2>
+      <div class="filters">
+        <select id="filterCategory">
+          <option value="all">All Categories</option>
+          <option>Road</option>
+          <option>Garbage</option>
+          <option>Water</option>
+          <option>Electricity</option>
+        </select>
+
+        <select id="filterStatus">
+          <option value="all">All Status</option>
+          <option value="open">Open</option>
+          <option value="inprogress">In Progress</option>
+          <option value="closed">Closed</option>
+        </select>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Reported Issues</h2>
+      <div id="issueList" class="issue-list"></div>
+    </section>
+
+    <aside class="card stats">
+      <h3>Stats</h3>
+      <p>Total: <span id="totalCount">0</span></p>
+      <p>Open: <span id="openCount">0</span></p>
+      <p>In Progress: <span id="inprogressCount">0</span></p>
+      <p>Closed: <span id="closedCount">0</span></p>
+    </aside>
+  </div>
+
+  <script src="script.js"></script>
+</body>
+</html>
