@@ -11,7 +11,7 @@ pipeline {
 
     stages {
 
-        /* === 1) Checkout on Controller === */
+        /* === 1) Checkout Repository on Controller === */
         stage('Checkout Repository') {
             agent { label 'built-in' }
             steps {
@@ -22,11 +22,11 @@ pipeline {
             }
         }
 
-        /* === 2) Build on Windows Agent === */
+        /* === 2) Build HTML/CSS/JS on Windows Agent === */
         stage('Build on Windows Agent') {
             agent { label 'win' }
             steps {
-                echo "Building HTML/CSS/JS project..."
+                echo "Building HTML/CSS/JS project on Windows Agent..."
                 bat """
                 if exist dist rmdir /s /q dist
                 mkdir dist
@@ -41,7 +41,7 @@ pipeline {
             }
         }
 
-        /* === 3) Optional: Parallel Demo (Controller vs Agent) === */
+        /* === 3) Optional: Parallel Demo (Controller vs Windows Agent) === */
         stage('Parallel Demo: Controller vs Agent') {
             parallel {
                 stage('Controller Lane') {
@@ -59,11 +59,11 @@ pipeline {
             }
         }
 
-        /* === 4) Deploy Stage (on Controller for simplicity) === */
+        /* === 4) Deploy on Controller === */
         stage('Deploy') {
             agent { label 'built-in' }
             steps {
-                echo "Deploying project..."
+                echo "Deploying project from Controller..."
                 // Example deployment command, modify as needed:
                 // bat 'xcopy /E /Y dist\\* \\server\\path\\to\\deploy\\'
             }
@@ -72,7 +72,11 @@ pipeline {
 
     post {
         always {
-            archiveArtifacts artifacts: 'build_status.txt, dist/**', allowEmptyArchive: false
+            // Archive artifacts on Windows Agent (where dist and build_status.txt exist)
+            node('win') {
+                echo "Archiving build artifacts..."
+                archiveArtifacts artifacts: 'build_status.txt, dist/**', allowEmptyArchive: false
+            }
         }
         success {
             echo 'Build and deploy completed successfully!'
