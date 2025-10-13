@@ -1,47 +1,79 @@
 pipeline {
-    agent any
+    agent none
+    options {
+        timestamps()
+        timeout(time: 15, unit: 'MINUTES')
+    }
 
     environment {
         REPO_URL = 'https://github.com/Komakulakavya/civictrack.git'
     }
 
     stages {
-        stage('Checkout') {
+
+        /* === 1) Checkout on Controller === */
+        stage('Checkout Repository') {
+            agent { label 'built-in' }
             steps {
-                echo 'Cloning repository...'
+                echo "Controller NODE = ${env.NODE_NAME}"
+                echo "Workspace = ${env.WORKSPACE}"
+                echo "Cloning repository..."
                 git url: "${REPO_URL}", branch: 'main'
             }
         }
 
-        stage('Install Dependencies') {
+        /* === 2) Build on Windows Agent === */
+        stage('Build on Windows Agent') {
+            agent { label 'win' }
             steps {
-                echo 'Installing dependencies (if any)...'
-                // No dependencies for plain HTML/CSS/JS, skip this for now
+                echo "Building HTML/CSS/JS project..."
+                bat """
+                if exist dist rmdir /s /q dist
+                mkdir dist
+
+                echo Copying HTML/CSS/JS files to dist folder...
+                copy /Y *.html dist\\
+                copy /Y *.css dist\\
+                copy /Y *.js dist\\
+
+                echo Build completed > build_status.txt
+                """
             }
         }
 
-        stage('Build') {
-            steps {
-                echo 'Building project...'
-                // Create dist folder
-                bat 'if not exist dist mkdir dist'
-                // Copy files to dist folder
-                bat 'copy /Y *.html dist\\'
-                bat 'copy /Y *.css dist\\'
-                bat 'copy /Y *.js dist\\'
+        /* === 3) Optional: Parallel Demo (Controller vs Agent) === */
+        stage('Parallel Demo: Controller vs Agent') {
+            parallel {
+                stage('Controller Lane') {
+                    agent { label 'built-in' }
+                    steps {
+                        echo "Controller NODE = ${env.NODE_NAME}"
+                    }
+                }
+                stage('Windows Agent Lane') {
+                    agent { label 'win' }
+                    steps {
+                        bat "echo Windows Agent NODE = %NODE_NAME%"
+                    }
+                }
             }
         }
 
+        /* === 4) Deploy Stage (on Controller for simplicity) === */
         stage('Deploy') {
+            agent { label 'built-in' }
             steps {
-                echo 'Deploying project...'
-                // Example: copy to a server (requires credentials configured in Jenkins)
+                echo "Deploying project..."
+                // Example deployment command, modify as needed:
                 // bat 'xcopy /E /Y dist\\* \\server\\path\\to\\deploy\\'
             }
         }
     }
 
     post {
+        always {
+            archiveArtifacts artifacts: 'build_status.txt, dist/**', allowEmptyArchive: false
+        }
         success {
             echo 'Build and deploy completed successfully!'
         }
