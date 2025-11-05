@@ -1,88 +1,97 @@
 pipeline {
-    agent none
-    options {
-        timestamps()
-        timeout(time: 15, unit: 'MINUTES')
+  agent any
+
+  environment {
+    IMAGE_REPO = "sidharthmahendra66/civictrack-jenkins"
+    IMAGE_TAG  = "build-${BUILD_NUMBER}"           // unique tag per build
+    LATEST_TAG = "latest"                          // also push 'latest'
+    AZ_RG      = "civictrack-rg"
+    AZ_LOC     = "eastus"
+    AZ_ACI     = "civictrack-aci"                  // container group name
+    AZ_DNS     = "civictrack"                // your desired public DNS label
+  }
+
+  options { timestamps(); ansiColor('xterm') }
+
+  stages {
+    stage('Checkout') {
+      steps { checkout scm }
     }
 
-    environment {
-        REPO_URL = 'https://github.com/Komakulakavya/civictrack.git'
+    stage('Docker Login') {
+      steps {
+        withCredentials([usernamePassword(credentialsId: 'dockerhub-creds',
+                   usernameVariable: 'DH_USER', passwordVariable: 'DH_PASS')]) {
+          sh '''
+            echo "$DH_PASS" | docker login -u "$DH_USER" --password-stdin
+          '''
+        }
+      }
     }
 
-    stages {
-
-        /* === 1) Checkout Repository on Controller === */
-        stage('Checkout Repository') {
-            agent { label 'built-in' }
-            steps {
-                echo "Controller NODE = ${env.NODE_NAME}"
-                echo "Workspace = ${env.WORKSPACE}"
-                echo "Cloning repository..."
-                git url: "${REPO_URL}", branch: 'main'
-            }
-        }
-
-        /* === 2) Build HTML/CSS/JS on Windows Agent === */
-        stage('Build on Windows Agent') {
-            agent { label 'win' }
-            steps {
-                echo "Building HTML/CSS/JS project on Windows Agent..."
-                bat """
-                if exist dist rmdir /s /q dist
-                mkdir dist
-
-                echo Copying HTML/CSS/JS files to dist folder...
-                copy /Y *.html dist\\
-                copy /Y *.css dist\\
-                copy /Y *.js dist\\
-
-                echo Build completed > build_status.txt
-                """
-            }
-        }
-
-        /* === 3) Optional: Parallel Demo (Controller vs Windows Agent) === */
-        stage('Parallel Demo: Controller vs Agent') {
-            parallel {
-                stage('Controller Lane') {
-                    agent { label 'built-in' }
-                    steps {
-                        echo "Controller NODE = ${env.NODE_NAME}"
-                    }
-                }
-                stage('Windows Agent Lane') {
-                    agent { label 'win' }
-                    steps {
-                        bat "echo Windows Agent NODE = %NODE_NAME%"
-                    }
-                }
-            }
-        }
-
-        /* === 4) Deploy on Controller === */
-        stage('Deploy') {
-            agent { label 'built-in' }
-            steps {
-                echo "Deploying project from Controller..."
-                // Example deployment command, modify as needed:
-                // bat 'xcopy /E /Y dist\\* \\server\\path\\to\\deploy\\'
-            }
-        }
+    stage('Build Image') {
+      steps {
+        sh '''
+          docker build -t ${IMAGE_REPO}:${IMAGE_TAG} .
+          docker tag  ${IMAGE_REPO}:${IMAGE_TAG} ${IMAGE_REPO}:${LATEST_TAG}
+        '''
+      }
     }
 
-    post {
-        always {
-            // Archive artifacts on Windows Agent (where dist and build_status.txt exist)
-            node('win') {
-                echo "Archiving build artifacts..."
-                archiveArtifacts artifacts: 'build_status.txt, dist/**', allowEmptyArchive: false
-            }
-        }
-        success {
-            echo 'Build and deploy completed successfully!'
-        }
-        failure {
-            echo 'Build failed!'
-        }
+    stage('Push to Docker Hub') {
+      steps {
+        sh '''
+          docker push ${IMAGE_REPO}:${IMAGE_TAG}
+          docker push ${IMAGE_REPO}:${LATEST_TAG}
+        '''
+      }
     }
+
+    stage('Deploy to Azure Container Instances') {
+      steps {
+        withCredentials([
+          usernamePassword(credentialsId: 'azure-sp-app',
+                           usernameVariable: 'AZ_APPID', passwordVariable: 'AZ_PASSWORD'),
+          string(credentialsId: 'azure-tenant-id',         variable: 'AZ_TENANT'),
+          string(credentialsId: 'azure-subscription-id',   variable: 'AZ_SUB')
+        ]) {
+          sh '''
+            # Login to Azure with service principal
+            az login --service-principal -u "$AZ_APPID" -p "$AZ_PASSWORD" --tenant "$AZ_TENANT" > /dev/null
+            az account set --subscription "$AZ_SUB"
+
+            # Ensure RG exists (safe if it already exists)
+            az group create --name ${AZ_RG} --location ${AZ_LOC} > /dev/null
+
+            # If a container with same name exists, delete it so we can reuse the same DNS label
+            az container delete --resource-group ${AZ_RG} --name ${AZ_ACI} --yes || true
+
+            # Create the new container instance using the freshly-pushed image tag
+            az container create \
+              --resource-group ${AZ_RG} \
+              --name ${AZ_ACI} \
+              --image ${IMAGE_REPO}:${IMAGE_TAG} \
+              --cpu 1 --memory 1 \
+              --ports 80 \
+              --dns-name-label ${AZ_DNS} \
+              --location ${AZ_LOC} \
+              --restart-policy Always
+
+            echo "Waiting for container to be Running..."
+            az container wait --resource-group ${AZ_RG} --name ${AZ_ACI} --custom "instanceView.state=='Running'"
+
+            echo "Public URL:"
+            az container show --resource-group ${AZ_RG} --name ${AZ_ACI} --query ipAddress.fqdn -o tsv
+          '''
+        }
+      }
+    }
+  }
+
+  post {
+    always {
+      sh 'docker logout || true'
+      cleanWs()
+    }
+  }
 }
