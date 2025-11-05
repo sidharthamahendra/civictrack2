@@ -11,7 +11,7 @@ pipeline {
     AZ_DNS     = "civictrack"                // your desired public DNS label
   }
 
-  options { timestamps(); ansiColor('xterm') }
+  options { timestamps() }
 
   stages {
     stage('Checkout') {
