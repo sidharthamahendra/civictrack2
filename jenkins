@@ -2,23 +2,20 @@ pipeline {
   agent any
 
   environment {
-    // ---- Docker Image Details ----
     IMAGE_REPO = "sidharthmahendra66/civictrack-app"
-    IMAGE_TAG  = "build-${BUILD_NUMBER}"   // Unique tag per build
-    LATEST_TAG = "latest"                  // Tag also as latest
+    IMAGE_TAG  = "build-${BUILD_NUMBER}"
+    LATEST_TAG = "latest"
 
-    // ---- Azure Deployment Details ----
-    AZ_RG   = "civictrack-rg"
-    AZ_LOC  = "eastus"
-    AZ_ACI  = "civictrack-prod-container"  // Container instance name
-    AZ_DNS  = "civictrack-prod-app"        // Unique public DNS name
+    AZ_RG  = "civictrack-rg"
+    AZ_LOC = "eastus"
+    AZ_ACI = "civictrack-prod-container"
+    AZ_DNS = "civictrack-prod-app"
   }
 
   options { timestamps() }
 
   stages {
 
-    /* ========== 1. CHECKOUT ========== */
     stage('Checkout') {
       steps {
         echo "📦 Checking out source code..."
@@ -26,15 +23,11 @@ pipeline {
       }
     }
 
-    /* ========== 2. DOCKER LOGIN ========== */
     stage('Docker Login') {
       steps {
         echo "🔐 Logging into DockerHub..."
-        withCredentials([usernamePassword(
-          credentialsId: 'dockerhub',
-          usernameVariable: 'DH_USER',
-          passwordVariable: 'DH_PASS'
-        )]) {
+        withCredentials([usernamePassword(credentialsId: 'dockerhub',
+                         usernameVariable: 'DH_USER', passwordVariable: 'DH_PASS')]) {
           bat '''
             echo %DH_PASS% | docker login -u %DH_USER% --password-stdin
           '''
@@ -42,18 +35,16 @@ pipeline {
       }
     }
 
-    /* ========== 3. BUILD IMAGE ========== */
     stage('Build Docker Image') {
       steps {
         echo "⚙️ Building Docker image..."
         bat '''
           docker build -t %IMAGE_REPO%:%IMAGE_TAG% .
-          docker tag %IMAGE_REPO%:%IMAGE_TAG% %IMAGE_REPO%:%LATEST_TAG%
+          docker tag  %IMAGE_REPO%:%IMAGE_TAG% %IMAGE_REPO%:%LATEST_TAG%
         '''
       }
     }
 
-    /* ========== 4. PUSH IMAGE ========== */
     stage('Push to Docker Hub') {
       steps {
         echo "📤 Pushing image to DockerHub..."
@@ -64,7 +55,6 @@ pipeline {
       }
     }
 
-    /* ========== 5. DEPLOY TO AZURE ========== */
     stage('Deploy to Azure Container Instances') {
       steps {
         echo "🚀 Deploying container to Azure..."
@@ -75,19 +65,19 @@ pipeline {
           string(credentialsId: 'azure-subscription-id', variable: 'AZ_SUB')
         ]) {
           bat '''
-            :: Login using Service Principal
-            az login --service-principal -u "%AZ_APPID%" -p "%AZ_PASSWORD%" --tenant "%AZ_TENANT%" >NUL
+            :: 1. Log in to Azure
+            az login --service-principal -u "%AZ_APPID%" -p "%AZ_PASSWORD%" --tenant "%AZ_TENANT%" > NUL
 
-            :: Set the subscription
+            :: 2. Set the subscription
             az account set --subscription "%AZ_SUB%"
 
-            :: Ensure the resource group exists
-            az group create --name %AZ_RG% --location %AZ_LOC% >NUL
+            :: 3. Create resource group (safe even if exists)
+            az group create --name %AZ_RG% --location %AZ_LOC% > NUL
 
-            :: Remove any existing container (ignore errors)
-            az container delete --resource-group %AZ_RG% --name %AZ_ACI% --yes || ver >NUL
+            :: 4. Delete old container (ignore if not exists)
+            az container delete --resource-group %AZ_RG% --name %AZ_ACI% --yes || ver > NUL
 
-            :: Deploy new container
+            :: 5. Deploy new container
             az container create ^
               --resource-group %AZ_RG% ^
               --name %AZ_ACI% ^
@@ -98,12 +88,11 @@ pipeline {
               --location %AZ_LOC% ^
               --restart-policy Always
 
-            :: Wait for it to start
-            echo Waiting for container to be ready...
+            :: 6. Wait until container is running
             az container wait --resource-group %AZ_RG% --name %AZ_ACI% --custom "instanceView.state=='Running'"
 
-            :: Show public DNS URL
-            echo ✅ Deployment complete! Public URL:
+            :: 7. Display public URL
+            echo Public URL:
             az container show --resource-group %AZ_RG% --name %AZ_ACI% --query ipAddress.fqdn -o tsv
           '''
         }
@@ -111,23 +100,14 @@ pipeline {
     }
   }
 
-  /* ========== POST ACTIONS (Safe Cleanup) ========== */
   post {
     always {
-      echo "🧹 Cleaning up Docker login and session..."
-      bat 'docker logout || ver >NUL'
-      bat 'az logout || ver >NUL'
-
-      // Avoid the Windows workspace lock error
-      echo "⚠️ Skipping workspace cleanup (Windows locks files sometimes)."
-    }
-
-    success {
+      echo "🧹 Cleaning up Docker login and Azure session..."
+      bat '''
+        docker logout || ver > NUL
+        az logout || ver > NUL
+      '''
       echo "✅ Pipeline completed successfully!"
-    }
-
-    failure {
-      echo "❌ Pipeline failed. Please check logs above."
     }
   }
 }
