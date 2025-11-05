@@ -1,72 +1,109 @@
 pipeline {
-    agent any
+  agent any
 
-    environment {
-        IMAGE_NAME = "sidharthmahendra66/civictrack"
-        IMAGE_TAG = "latest"
+  environment {
+    // --- I have changed this to a new name as you requested ---
+    IMAGE_REPO = "sidharthmahendra66/civictrack-app"
+    IMAGE_TAG  = "build-${BUILD_NUMBER}"      // unique tag per build
+    LATEST_TAG = "latest"                     // also push 'latest'
+    
+    AZ_RG      = "civictrack-rg"
+    AZ_LOC     = "eastus"
+    
+    // --- I have changed these to new, unique names as you requested ---
+    AZ_ACI     = "civictrack-prod-container"   // New container group name
+    AZ_DNS     = "civictrack-prod-app"       // New, unique public DNS label
+  }
+
+  options { timestamps() }
+
+  stages {
+    stage('Checkout') {
+      steps { checkout scm }
     }
 
-    options {
-        timestamps()
+    stage('Docker Login') {
+      steps {
+        // Uses the 'dockerhub' ID from your Jenkins credentials
+        withCredentials([usernamePassword(credentialsId: 'dockerhub',
+                         usernameVariable: 'DH_USER', passwordVariable: 'DH_PASS')]) {
+          bat '''
+            echo "%DH_PASS%" | docker login -u "%DH_USER%" --password-stdin
+          '''
+        }
+      }
     }
 
-    stages {
-        stage('Checkout') {
-            steps {
-                git branch: 'main', url: 'https://github.com/sidharthamahendra/civictrack2.git'
-            }
-        }
-
-        stage('Docker Login') {
-            steps {
-                withCredentials([usernamePassword(credentialsId: 'dockerhub', usernameVariable: 'DH_USER', passwordVariable: 'DH_PASS')]) {
-                    bat """
-                        echo %DH_PASS% | docker login -u %DH_USER% --password-stdin
-                    """
-                }
-            }
-        }
-
-        stage('Build Docker Image') {
-            steps {
-                bat """
-                    docker build -t %IMAGE_NAME%:%IMAGE_TAG% .
-                """
-            }
-        }
-
-        stage('Push Image to Docker Hub') {
-            steps {
-                bat """
-                    docker push %IMAGE_NAME%:%IMAGE_TAG%
-                """
-            }
-        }
-
-        stage('Deploy to Azure Container Instances') {
-            steps {
-                withCredentials([
-                    usernamePassword(credentialsId: 'azure-sp-app', usernameVariable: 'AZ_APP_ID', passwordVariable: 'AZ_PASSWORD'),
-                    string(credentialsId: 'azure-tenant-id', variable: 'AZ_TENANT_ID'),
-                    string(credentialsId: 'azure-subscription-id', variable: 'AZ_SUBSCRIPTION_ID')
-                ]) {
-                    bat """
-                        az login --service-principal -u %AZ_APP_ID% -p %AZ_PASSWORD% --tenant %AZ_TENANT_ID%
-                        az account set --subscription %AZ_SUBSCRIPTION_ID%
-                        az container create --resource-group civictrack-rg --name civictrack-container --image %IMAGE_NAME%:%IMAGE_TAG% --dns-name-label civictrackapp --ports 80 --location eastus --restart-policy Always
-                    """
-                }
-            }
-        }
+    stage('Build Image') {
+      steps {
+        bat '''
+          docker build -t ${IMAGE_REPO}:${IMAGE_TAG} .
+          docker tag  ${IMAGE_REPO}:${IMAGE_TAG} ${IMAGE_REPO}:${LATEST_TAG}
+        '''
+      }
     }
 
-    post {
-        always {
-            bat """
-                echo Cleaning up local Docker images...
-                docker image prune -f
-                echo Pipeline completed successfully.
-            """
-        }
+    stage('Push to Docker Hub') {
+      steps {
+        bat '''
+          docker push ${IMAGE_REPO}:${IMAGE_TAG}
+          docker push ${IMAGE_REPO}:${LATEST_TAG}
+        '''
+      }
     }
+
+    // --- THIS IS THE FULLY CORRECTED DEPLOY STAGE ---
+    stage('Deploy to Azure Container Instances') {
+      steps {
+        withCredentials([
+          usernamePassword(credentialsId: 'azure-sp-app',
+                           usernameVariable: 'AZ_APPID', passwordVariable: 'AZ_PASSWORD'),
+          string(credentialsId: 'azure-tenant-id',      variable: 'AZ_TENANT'),
+          string(credentialsId: 'azure-subscription-id',  variable: 'AZ_SUB')
+        ]) {
+          bat '''
+            :: 1. Log in
+            az login --service-principal -u "%AZ_APPID%" -p "%AZ_PASSWORD%" --tenant "%AZ_TENANT%" > NUL
+            
+            :: 2. Set the subscription
+            az account set --subscription "%AZ_SUB%"
+
+            :: 3. Create the resource group (this is safe to run even if it exists)
+            az group create --name ${AZ_RG} --location ${AZ_LOC} > NUL
+
+            :: 4. Delete any old container with the same name
+            :: "|| ver > NUL" is the Windows equivalent of "|| true" to ignore errors
+            az container delete --resource-group ${AZ_RG} --name ${AZ_ACI} --yes || ver > NUL
+
+            :: 5. Create the new container
+            :: Note: Using ^ (caret) for line continuation in Windows Batch
+            az container create ^
+              --resource-group ${AZ_RG} ^
+              --name ${AZ_ACI} ^
+              --image ${IMAGE_REPO}:${LATEST_TAG} ^
+              --cpu 1 --memory 1 ^
+              --ports 80 ^
+              --dns-name-label ${AZ_DNS} ^
+              --location ${AZ_LOC} ^
+              --restart-policy Always
+
+            :: 6. Wait for it to be ready
+            echo "Waiting for container to be Running..."
+            az container wait --resource-group ${AZ_RG} --name ${AZ_ACI} --custom "instanceView.state=='Running'"
+
+            :: 7. Print the public URL
+            echo "Public URL:"
+            az container show --resource-group ${AZ_RG} --name ${AZ_ACI} --query ipAddress.fqdn -o tsv
+          '''
+        }
+      }
+    }
+  }
+
+  post {
+    always {
+      bat 'docker logout || ver > NUL'
+      cleanWs()
+    }
+  }
 }
