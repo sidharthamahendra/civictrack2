@@ -2,40 +2,43 @@ pipeline {
   agent any
 
   environment {
+    // Docker image details
     IMAGE_REPO = "sidharthmahendra66/civictrack-app"
     IMAGE_TAG  = "build-${BUILD_NUMBER}"
     LATEST_TAG = "latest"
-    
-    AZ_RG      = "civictrack-rg"
-    AZ_LOC     = "eastus"
-    AZ_ACI     = "civictrack-prod-container"
-    AZ_DNS     = "civictrack-prod-app"
+
+    // Azure settings
+    AZ_RG  = "civictrack-rg"
+    AZ_LOC = "eastus"
+    AZ_ACI = "civictrack-prod-container"
+    AZ_DNS = "civictrack-prod-app"
   }
 
   options { timestamps() }
 
   stages {
     stage('Checkout') {
-      steps { checkout scm }
+      steps {
+        checkout scm
+      }
     }
 
     stage('Docker Login') {
       steps {
         withCredentials([usernamePassword(credentialsId: 'dockerhub',
                          usernameVariable: 'DH_USER', passwordVariable: 'DH_PASS')]) {
-          // Important: Use "echo %DH_PASS% | docker login ..." — not with quotes
           bat '''
-            echo %DH_PASS% | docker login -u %DH_USER% --password-stdin
+            echo "%DH_PASS%" | docker login -u "%DH_USER%" --password-stdin
           '''
         }
       }
     }
 
-    stage('Build Image') {
+    stage('Build Docker Image') {
       steps {
         bat '''
-          docker build -t %IMAGE_REPO%:%IMAGE_TAG% .
-          docker tag %IMAGE_REPO%:%IMAGE_TAG% %IMAGE_REPO%:%LATEST_TAG%
+          docker build -t ${IMAGE_REPO}:${IMAGE_TAG} .
+          docker tag ${IMAGE_REPO}:${IMAGE_TAG} ${IMAGE_REPO}:${LATEST_TAG}
         '''
       }
     }
@@ -43,8 +46,8 @@ pipeline {
     stage('Push to Docker Hub') {
       steps {
         bat '''
-          docker push %IMAGE_REPO%:%IMAGE_TAG%
-          docker push %IMAGE_REPO%:%LATEST_TAG%
+          docker push ${IMAGE_REPO}:${IMAGE_TAG}
+          docker push ${IMAGE_REPO}:${LATEST_TAG}
         '''
       }
     }
@@ -58,35 +61,40 @@ pipeline {
           string(credentialsId: 'azure-subscription-id', variable: 'AZ_SUB')
         ]) {
           bat '''
-            :: Azure Login
-            az login --service-principal -u "%AZ_APPID%" -p "%AZ_PASSWORD%" --tenant "%AZ_TENANT%"
-            
-            :: Set subscription
+            :: 1. Azure login
+            az login --service-principal -u "%AZ_APPID%" -p "%AZ_PASSWORD%" --tenant "%AZ_TENANT%" > NUL
+
+            :: 2. Select subscription
             az account set --subscription "%AZ_SUB%"
 
-            :: Create resource group
-            az group create --name %AZ_RG% --location %AZ_LOC%
+            :: 3. Create resource group (safe if exists)
+            az group create --name ${AZ_RG} --location ${AZ_LOC} > NUL
 
-            :: Delete any existing container
-            az container delete --resource-group %AZ_RG% --name %AZ_ACI% --yes || ver > NUL
+            :: 4. Remove old container instance (ignore errors)
+            az container delete --resource-group ${AZ_RG} --name ${AZ_ACI} --yes || ver > NUL
 
-            :: Create new container
+            :: 5. Deploy new container
             az container create ^
-              --resource-group %AZ_RG% ^
-              --name %AZ_ACI% ^
-              --image %IMAGE_REPO%:%LATEST_TAG% ^
-              --cpu 1 --memory 1 ^
+              --resource-group ${AZ_RG} ^
+              --name ${AZ_ACI} ^
+              --image ${IMAGE_REPO}:${LATEST_TAG} ^
+              --cpu 1 ^
+              --memory 1 ^
               --ports 80 ^
-              --dns-name-label %AZ_DNS% ^
-              --location %AZ_LOC% ^
+              --dns-name-label ${AZ_DNS} ^
+              --location ${AZ_LOC} ^
               --restart-policy Always
 
-            :: Wait for it to be running
-            az container wait --resource-group %AZ_RG% --name %AZ_ACI% --custom "instanceView.state=='Running'"
+            :: 6. Wait for container to be ready
+            echo Waiting for container to be Running...
+            az container wait --resource-group ${AZ_RG} --name ${AZ_ACI} --custom "instanceView.state=='Running'"
 
-            :: Show public URL
-            echo "Public URL:"
-            az container show --resource-group %AZ_RG% --name %AZ_ACI% --query ipAddress.fqdn -o tsv
+            :: 7. Show public URL
+            echo ===========================
+            echo Deployment Completed!
+            echo Your app is live at:
+            az container show --resource-group ${AZ_RG} --name ${AZ_ACI} --query ipAddress.fqdn -o tsv
+            echo ===========================
           '''
         }
       }
@@ -97,8 +105,15 @@ pipeline {
     always {
       bat '''
         docker logout || ver > NUL
+        az logout || ver > NUL
       '''
-      cleanWs()
+      script {
+        try {
+          cleanWs()
+        } catch (err) {
+          echo "⚠️  Workspace cleanup failed (safe to ignore on Windows). Error: ${err}"
+        }
+      }
     }
   }
 }
